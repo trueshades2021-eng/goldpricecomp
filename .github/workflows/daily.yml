@@ -2,8 +2,14 @@ name: Daily gold rate
 
 on:
   schedule:
-    - cron: "30 4 * * *"   # 04:30 UTC = 10:00 AM IST
-  workflow_dispatch:
+    # Several attempts, because GitHub sometimes delays or skips a scheduled run.
+    # Later attempts do nothing if today's rate is already saved.
+    - cron: "30 4 * * *"   # 10:00 AM IST
+    - cron: "50 4 * * *"   # 10:20 AM IST
+    - cron: "20 5 * * *"   # 10:50 AM IST
+    - cron: "30 6 * * *"   # 12:00 PM IST
+    - cron: "30 8 * * *"   #  2:00 PM IST
+  workflow_dispatch:        # manual run from the Actions tab (always runs)
 
 permissions:
   contents: write
@@ -18,17 +24,39 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
+
+      - name: Check if today's rate is already saved
+        id: check
+        env:
+          EVENT: ${{ github.event_name }}
+        run: |
+          TODAY=$(TZ=Asia/Kolkata date +%F)
+          if [ "$EVENT" != "workflow_dispatch" ] && [ -f data/gold_rates.csv ] && grep -Eq "^$TODAY,[^,]*,[0-9.]+,[0-9.]+,[0-9.]+" data/gold_rates.csv; then
+            echo "done=true" >> "$GITHUB_OUTPUT"
+            echo "Today's rate ($TODAY) is already saved - nothing to do."
+          else
+            echo "done=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - uses: actions/setup-python@v5
+        if: steps.check.outputs.done != 'true'
         with:
           python-version: "3.12"
+
       - name: Install Playwright and Chromium
+        if: steps.check.outputs.done != 'true'
         run: |
           pip install playwright
           python -m playwright install --with-deps chromium
+
       - name: Fetch rates and build report
+        if: steps.check.outputs.done != 'true'
         run: python grt_rate_tracker.py
+
       - name: Publish report as the web page
+        if: steps.check.outputs.done != 'true'
         run: cp data/report.html index.html
+
       - name: Save debug files if something went wrong
         if: failure()
         uses: actions/upload-artifact@v4
@@ -36,7 +64,9 @@ jobs:
           name: debug-files
           path: data/debug_*
           if-no-files-found: ignore
+
       - name: Commit updated data
+        if: steps.check.outputs.done != 'true'
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
